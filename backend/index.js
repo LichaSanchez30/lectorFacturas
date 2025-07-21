@@ -25,7 +25,7 @@ if (!fs.existsSync(outputDir)) {
   console.log('📂 Carpeta /output creada.');
 }
 
-// Multer config: renombrar archivos sin espacios raros
+// Multer config
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadsDir),
   filename: (req, file, cb) => {
@@ -40,6 +40,10 @@ const upload = multer({ storage: storage });
  * Función robusta para extraer datos de la factura
  */
 function extractData(text) {
+  // === Guarda TODO el texto ===
+  fs.writeFileSync(path.join(__dirname, 'texto_extraido.txt'), text, 'utf-8');
+  console.log('\n=== Texto PDF guardado como texto_extraido.txt ===');
+
   // === Fecha de Emisión ===
   const fechaEmision = text.match(/Fecha[\s\S]*?Emisi[oó]n[:]*[\s\S]*?(\d{2}\/\d{2}\/\d{4})/)?.[1] || 'No encontrada';
 
@@ -52,33 +56,29 @@ function extractData(text) {
   // === CUIT ===
   const cuit = text.match(/\b(\d{2}-?\d{8}-?\d)\b/)?.[1] || text.match(/\b(\d{11})\b/)?.[1] || 'No encontrado';
 
-  // === Punto de Venta y Comp. Nro ===
-//   const facturaMatch = text.match(/Punto[\s\S]*?Venta[:]*[\s\S]*?(\d{5})[\s\S]*?Comp\.?[\s\S]*?Nro[:]*[\s\S]*?(\d{8})/i);
-//   console.log('\n=== FACTURA MATCH ===\n', facturaMatch);
+  // === Punto de Venta y Comp. Nro — versión definitiva ===
+  const lineas = text.split('\n').map(l => l.trim());
+  const indexLineaPto = lineas.findIndex(l => l.toLowerCase().includes('punto') && l.toLowerCase().includes('comp'));
 
-//   const puntoVenta = facturaMatch?.[1]?.replace(/[^\d]/g, '').trim() || 'No encontrado';
-//   const nroComprobante = facturaMatch?.[2]?.replace(/[^\d]/g, '').trim() || 'No encontrado';
-//   const numeroFactura = `${puntoVenta}-${nroComprobante}`;
+  console.log('\n=== LÍNEA CLAVE ===\n', lineas[indexLineaPto]);
 
-// === Punto de Venta y Comp. Nro versión quirúrgica ===
-const lineaFactura = text.match(/Punto[\s\S]*?Venta[:]*[\s\S]*?(\d{5}[\s\S]*?Comp\.?[\s\S]*?Nro[:]*[\s\S]*?\d{5,})/i);
+  let puntoVenta = 'No encontrado';
+  let nroComprobante = 'No encontrado';
 
-console.log('\n=== LINEA FACTURA ===\n', lineaFactura);
+  if (indexLineaPto !== -1 && lineas[indexLineaPto + 1]) {
+    const bloqueNumerico = lineas[indexLineaPto + 1].replace(/[^\d]/g, '');
+    console.log('\n=== BLOQUE NUMÉRICO DETECTADO ===\n', bloqueNumerico);
 
-let puntoVenta = 'No encontrado';
-let nroComprobante = 'No encontrado';
+    if (bloqueNumerico.length >= 8) {
+      puntoVenta = bloqueNumerico.slice(0, 5);
+      nroComprobante = bloqueNumerico.slice(5);
+    }
+  }
 
-if (lineaFactura && lineaFactura[1]) {
-  puntoVenta = lineaFactura[1].match(/(\d{5})/)?.[1] || 'No encontrado';
-  nroComprobante = lineaFactura[1].match(/Nro[:]*[\s\S]*?(\d{6,9})/)?.[1] || 'No encontrado';
-}
+  const numeroFactura = `${puntoVenta}-${nroComprobante}`;
+  console.log('\n=== RESULTADO FACTURA FINAL ===\n', { puntoVenta, nroComprobante, numeroFactura });
 
-puntoVenta = puntoVenta.replace(/[^\d]/g, '').trim();
-nroComprobante = nroComprobante.replace(/[^\d]/g, '').trim();
-
-const numeroFactura = `${puntoVenta}-${nroComprobante}`;
-
-  // === CAE robusto ===
+  // === CAE ===
   let cae = text.match(/CAE\s*(N[°º]|:)?\s*(\d{14})/)?.[2];
   if (!cae) {
     cae = text.match(/Comprobante Autorizado[\s\S]*?(\d{14})/)?.[1];
@@ -116,10 +116,6 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
       const dataBuffer = fs.readFileSync(filePath);
       const data = await pdfParse(dataBuffer);
 
-      // DEBUG: ver primeros caracteres del texto
-      console.log('\n===== TEXTO EXTRAÍDO =====\n');
-      console.log(data.text.slice(0, 500));
-
       const extracted = extractData(data.text);
       console.log(`✅ Procesado: ${file.filename}`);
       results.push({ archivo: file.originalname, ...extracted });
@@ -129,7 +125,6 @@ app.post('/upload', upload.array('pdfs'), async (req, res) => {
     }
   }
 
-  // Crear Excel
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(results);
   XLSX.utils.book_append_sheet(wb, ws, 'Facturas');
@@ -146,7 +141,7 @@ app.get('/download', (req, res) => {
   res.download(file);
 });
 
-// === Iniciar servidor ===
+// === Arrancar servidor ===
 app.listen(PORT, () => {
   console.log(`🚀 Servidor backend corriendo en http://localhost:${PORT}`);
 });
