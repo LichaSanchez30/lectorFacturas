@@ -1,3 +1,4 @@
+// backend/index.js (Corregido CUIT y monto total para Facturas A y C)
 const express = require('express');
 const multer = require('multer');
 const fs = require('fs');
@@ -11,137 +12,124 @@ const PORT = 5000;
 
 app.use(cors());
 
-// Crear carpetas si no existen
 const uploadsDir = path.join(__dirname, 'uploads');
 const outputDir = path.join(__dirname, 'output');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
+if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir);
 
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir);
-  console.log('📂 Carpeta /uploads creada.');
-}
-
-if (!fs.existsSync(outputDir)) {
-  fs.mkdirSync(outputDir);
-  console.log('📂 Carpeta /output creada.');
-}
-
-// Multer config
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadsDir),
-  filename: (req, file, cb) => {
-    const safeName = file.originalname.replace(/\s+/g, '_');
-    cb(null, `${Date.now()}-${safeName}`);
-  }
+  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/\s+/g, '_')}`)
 });
+const upload = multer({ storage });
 
-const upload = multer({ storage: storage });
+function parseMonto(monto) {
+  if (!monto) return 0;
+  const n = parseFloat(monto.replace(/\./g, '').replace(',', '.'));
+  return isNaN(n) ? 0 : n;
+}
 
-/**
- * Función robusta para extraer datos de la factura
- */
+function getTextoOriginal(text) {
+  const bloques = text.split(/Fecha de Emisi[óo]n:/);
+  for (let b of bloques) {
+    if (b.includes("ORIGINAL")) return "Fecha de Emisión:" + b;
+  }
+  return text;
+}
+
 function extractData(text) {
-  // === Guarda TODO el texto ===
-  fs.writeFileSync(path.join(__dirname, 'texto_extraido.txt'), text, 'utf-8');
-  console.log('\n=== Texto PDF guardado como texto_extraido.txt ===');
+  text = getTextoOriginal(text);
 
-  // === Fecha de Emisión ===
-  const fechaEmision = text.match(/Fecha[\s\S]*?Emisi[oó]n[:]*[\s\S]*?(\d{2}\/\d{2}\/\d{4})/)?.[1] || 'No encontrada';
-
-  // === Período Facturado ===
-  const periodos = text.match(/Período Facturado Desde[:\s\S]*?Hasta[:\s\S]*?Fecha de Vto\. para el pago[:\s\S]*?(\d{2}\/\d{2}\/\d{4})[\s\S]*?(\d{2}\/\d{2}\/\d{4})[\s\S]*?(\d{2}\/\d{2}\/\d{4})/);
+  const fechaEmision = text.match(/Fecha[\s\S]*?Emisi[óo]n[:]*[\s\S]*?(\d{2}\/\d{2}\/\d{4})/)?.[1] || 'No encontrada';
+  const periodos = text.match(/Per[íi]odo Facturado Desde[:\s\S]*?Hasta[:\s\S]*?Fecha de Vto\. para el pago[:\s\S]*?(\d{2}\/\d{2}\/\d{4})[\s\S]*?(\d{2}\/\d{2}\/\d{4})[\s\S]*?(\d{2}\/\d{2}\/\d{4})/);
   const periodoDesde = periodos?.[1] || 'No encontrado';
   const periodoHasta = periodos?.[2] || 'No encontrado';
   const fechaVtoPago = periodos?.[3] || 'No encontrada';
 
-  // === CUIT ===
-  const cuit = text.match(/\b(\d{2}-?\d{8}-?\d)\b/)?.[1] || text.match(/\b(\d{11})\b/)?.[1] || 'No encontrado';
+  // === CUIT robusto (emisor) ===
+  let cuit = text.match(/CUIT\s*[:]*\s*(\d{2}-?\d{8}-?\d)/)?.[1];
+  if (!cuit) {
+    const allCUITs = [...text.matchAll(/\b(\d{2}-?\d{8}-?\d)\b/g)].map(m => m[1]);
+    if (allCUITs.length >= 1) cuit = allCUITs[0];
+    else cuit = 'No encontrado';
+  }
 
-  // === Punto de Venta y Comp. Nro — versión definitiva ===
   const lineas = text.split('\n').map(l => l.trim());
   const indexLineaPto = lineas.findIndex(l => l.toLowerCase().includes('punto') && l.toLowerCase().includes('comp'));
-
-  console.log('\n=== LÍNEA CLAVE ===\n', lineas[indexLineaPto]);
-
   let puntoVenta = 'No encontrado';
   let nroComprobante = 'No encontrado';
-
   if (indexLineaPto !== -1 && lineas[indexLineaPto + 1]) {
     const bloqueNumerico = lineas[indexLineaPto + 1].replace(/[^\d]/g, '');
-    console.log('\n=== BLOQUE NUMÉRICO DETECTADO ===\n', bloqueNumerico);
-
     if (bloqueNumerico.length >= 8) {
       puntoVenta = bloqueNumerico.slice(0, 5);
       nroComprobante = bloqueNumerico.slice(5);
     }
   }
-
   const numeroFactura = `${puntoVenta}-${nroComprobante}`;
-  console.log('\n=== RESULTADO FACTURA FINAL ===\n', { puntoVenta, nroComprobante, numeroFactura });
+  const tipoFactura = text.match(/FACTURA\s*([ABC])/i)?.[1].toUpperCase() || 'No encontrada';
 
-  // === CAE ===
-  let cae = text.match(/CAE\s*(N[°º]|:)?\s*(\d{14})/)?.[2];
-  if (!cae) {
-    cae = text.match(/Comprobante Autorizado[\s\S]*?(\d{14})/)?.[1];
+  // === Monto Total (más flexible para factura C) ===
+  let montoTotal = 0;
+  const matchTotal = text.match(/Importe Total[^\d]*(\d{1,3}(?:[\.\d]{0,10})?,\d{2})/);
+  if (matchTotal) {
+    montoTotal = parseMonto(matchTotal[1]);
+  } else {
+    // Buscar números luego de la palabra Subtotal
+    const matchSub = text.match(/Subtotal[^\d]*(\d{1,3}(?:[\.\d]{0,10})?,\d{2})/);
+    if (matchSub) {
+      montoTotal = parseMonto(matchSub[1]);
+    } else {
+      // Buscar último número decimal como fallback
+      const matchNum = [...text.matchAll(/(\d{1,3}(?:[\.\d]{0,10})?,\d{2})/g)].map(m => m[1]);
+      if (matchNum.length > 0) {
+        montoTotal = parseMonto(matchNum[matchNum.length - 1]);
+      }
+    }
   }
-  cae = cae || 'No encontrado';
 
-  // === Fecha Vto. CAE ===
+  const cae = text.match(/CAE\s*(N[°º]|:)?\s*(\d{14})/)?.[2] || text.match(/Comprobante Autorizado[\s\S]*?(\d{14})/)?.[1] || 'No encontrado';
   const fechaVtoCae = text.match(/Comprobante Autorizado[\s\S]*?(\d{2}\/\d{2}\/\d{4})/)?.[1] || 'No encontrada';
 
   return {
     fechaEmision,
-    periodoDesde,
-    periodoHasta,
-    fechaVtoPago,
+    tipoFactura,
     numeroFactura,
     cuit,
+    montoTotal,
     cae,
     fechaVtoCae
   };
 }
 
-// === Endpoint principal ===
 app.post('/upload', upload.array('pdfs'), async (req, res) => {
   const files = req.files;
   const results = [];
-
   if (!files || files.length === 0) {
     return res.status(400).json({ message: 'No se recibieron archivos.' });
   }
-
   for (const file of files) {
-    const filePath = path.join(uploadsDir, file.filename);
-
     try {
-      const dataBuffer = fs.readFileSync(filePath);
-      const data = await pdfParse(dataBuffer);
-
+      const data = await pdfParse(fs.readFileSync(path.join(uploadsDir, file.filename)));
       const extracted = extractData(data.text);
-      console.log(`✅ Procesado: ${file.filename}`);
+      console.log(`✅ Procesado: ${file.originalname}`);
       results.push({ archivo: file.originalname, ...extracted });
-
     } catch (err) {
-      console.error(`❌ Error procesando ${file.filename}:`, err);
+      console.error(`❌ Error procesando ${file.originalname}:`, err);
     }
   }
-
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(results);
   XLSX.utils.book_append_sheet(wb, ws, 'Facturas');
-
   const outputPath = path.join(outputDir, 'Facturas_Procesadas.xlsx');
   XLSX.writeFile(wb, outputPath);
-
   res.json({ message: 'Proceso terminado', excel: '/download' });
 });
 
-// === Endpoint para descargar Excel ===
 app.get('/download', (req, res) => {
-  const file = path.join(outputDir, 'Facturas_Procesadas.xlsx');
-  res.download(file);
+  res.download(path.join(outputDir, 'Facturas_Procesadas.xlsx'));
 });
 
-// === Arrancar servidor ===
 app.listen(PORT, () => {
   console.log(`🚀 Servidor backend corriendo en http://localhost:${PORT}`);
 });
+
