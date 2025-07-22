@@ -133,3 +133,6 @@ app.listen(PORT, () => {
   console.log(`🚀 Servidor backend corriendo en http://localhost:${PORT}`);
 });
 
+app.get('/', (req, res) => {
+  res.send('🧾 Lector de Facturas Backend está activo.');
+});
