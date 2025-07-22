@@ -56,8 +56,7 @@ function App() {
   const [files, setFiles] = useState(null);
   const [status, setStatus] = useState('');
 
-  // ✅ Poné acá tu URL del backend de Render
-  const backendUrl = 'https://tu-backend.onrender.com';
+  const backendUrl = 'https://tu-backend.onrender.com'; // ⚠️ Reemplazá esto con tu URL real
 
   const handleFileChange = (e) => {
     setFiles(e.target.files);
@@ -91,10 +90,8 @@ function App() {
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial', maxWidth: '600px', margin: 'auto' }}>
       <h2>📄 Lector de Facturas PDF → Excel</h2>
-
       <input type="file" multiple accept="application/pdf" onChange={handleFileChange} />
       <br /><br />
-
       <button onClick={handleUpload}>Subir y Procesar</button>
       <p>{status}</p>
 
