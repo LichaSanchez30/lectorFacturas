@@ -56,7 +56,7 @@ function App() {
   const [files, setFiles] = useState(null);
   const [status, setStatus] = useState('');
 
-  const backendUrl = 'https://tu-backend.onrender.com'; // ⚠️ Reemplazá esto con tu URL real
+  const backendUrl = 'https://poetic-pika-933595.netlify.app/'; // ⚠️ Reemplazá esto con tu URL real
 
   const handleFileChange = (e) => {
     setFiles(e.target.files);
